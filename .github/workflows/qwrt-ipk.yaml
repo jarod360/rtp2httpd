@@ -1,0 +1,112 @@
+name: QWRT Cortex-A53 IPK
+on:
+  push:
+    branches: [iptv-seek-redirect]
+    paths: ['.github/workflows/qwrt-ipk.yaml', 'src/**', 'openwrt-support/rtp2httpd/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ipk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare the package recipe
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          recipe = Path("openwrt-support/rtp2httpd/Makefile")
+          src, count = re.subn(r"RELEASE_VERSION:=.*?(?=\n\n# For firmware maintainers)",
+                               "RELEASE_VERSION:=3.17.2", recipe.read_text(), flags=re.S)
+          assert count == 1 and src.count("PKG_RELEASE:=1") == 1
+          src = src.replace("PKG_RELEASE:=1", "PKG_RELEASE:=2")
+          src = src.replace("/etc/rtp2httpd.conf\nendef",
+                            "/etc/rtp2httpd.conf\n/etc/luci-uploads/iptv.m3u\nendef")
+          src = src.replace("\t$(INSTALL_CONF) ./files/rtp2httpd.conf",
+                            "\t$(INSTALL_DIR) $(1)/etc/luci-uploads\n"
+                            "\tprintf '%s\\n' '#EXTM3U' > $(1)/etc/luci-uploads/iptv.m3u\n"
+                            "\tchmod 600 $(1)/etc/luci-uploads/iptv.m3u\n"
+                            "\t$(INSTALL_CONF) ./files/rtp2httpd.conf")
+          hooks = '''
+          define Package/rtp2httpd/preinst
+          #!/bin/sh
+          set -e
+          playlist="$$IPKG_INSTROOT/etc/luci-uploads/iptv.m3u"
+          backup_dir="$$IPKG_INSTROOT/etc/rtp2httpd-package-backup"
+          if [ -f "$$playlist" ] && [ ! -f "$$backup_dir/iptv.m3u" ]; then
+            umask 077
+            mkdir -p "$$backup_dir"
+            cp -p "$$playlist" "$$backup_dir/iptv.m3u.new"
+            mv "$$backup_dir/iptv.m3u.new" "$$backup_dir/iptv.m3u"
+          fi
+          exit 0
+          endef
+
+          define Package/rtp2httpd/postinst
+          #!/bin/sh
+          set -e
+          playlist="$$IPKG_INSTROOT/etc/luci-uploads/iptv.m3u"
+          backup_dir="$$IPKG_INSTROOT/etc/rtp2httpd-package-backup"
+          if [ -f "$$backup_dir/iptv.m3u" ]; then
+            mkdir -p "$$(dirname "$$playlist")"
+            cp -p "$$backup_dir/iptv.m3u" "$$playlist.new"
+            mv "$$playlist.new" "$$playlist"
+            rm -f "$$backup_dir/iptv.m3u"
+            rmdir "$$backup_dir" 2>/dev/null || true
+          fi
+          if [ -f "$$IPKG_INSTROOT/lib/functions.sh" ]; then
+            . "$$IPKG_INSTROOT/lib/functions.sh"
+            default_postinst "$$0" "$$@"
+          fi
+          exit 0
+          endef
+
+          '''
+          marker = "$(eval $(call BuildPackage,rtp2httpd))"
+          assert src.count(marker) == 1 and "$(1)/etc/luci-uploads/iptv.m3u" in src
+          recipe.write_text(src.replace(marker, hooks.lstrip() + marker))
+          PY
+      - name: Build with OpenWrt SDK
+        uses: openwrt/gh-action-sdk@v11
+        env:
+          ARCH: aarch64_cortex-a53-24.10.8
+          NO_SHFMT_CHECK: 'true'
+          PACKAGES: rtp2httpd
+          V: sc
+      - name: Verify package and playlist preservation
+        run: |
+          set -euo pipefail
+          package=$(find bin/packages/aarch64_cortex-a53/action -maxdepth 1 -name 'rtp2httpd_3.17.2-r2_aarch64_cortex-a53.ipk' -type f -print -quit)
+          test -n "$package"
+          tmp=$(mktemp -d)
+          mkdir -p "$tmp/control" "$tmp/data"
+          tar -xzf "$package" -C "$tmp"
+          tar -xzf "$tmp/control.tar.gz" -C "$tmp/control"
+          tar -xzf "$tmp/data.tar.gz" -C "$tmp/data"
+          grep -Fx 'Package: rtp2httpd' "$tmp/control/control"
+          grep -Fx 'Version: 3.17.2-r2' "$tmp/control/control"
+          grep -Fx 'Architecture: aarch64_cortex-a53' "$tmp/control/control"
+          for entry in /etc/config/rtp2httpd /etc/rtp2httpd.conf /etc/luci-uploads/iptv.m3u; do
+            grep -Fx "$entry" "$tmp/control/conffiles"
+          done
+          test -x "$tmp/data/etc/init.d/rtp2httpd"
+          readelf -h "$tmp/data/usr/bin/rtp2httpd" | grep AArch64
+          test "$(cat "$tmp/data/etc/luci-uploads/iptv.m3u")" = '#EXTM3U'
+          root="$tmp/upgrade"
+          mkdir -p "$root/etc/luci-uploads"
+          printf '%s\n' '#EXTM3U' '#EXTINF:-1,Verification fixture' 'rtp://239.1.1.1:1234' > "$tmp/before.m3u"
+          cp "$tmp/before.m3u" "$root/etc/luci-uploads/iptv.m3u"
+          IPKG_INSTROOT="$root" sh "$tmp/control/preinst"
+          cp "$tmp/data/etc/luci-uploads/iptv.m3u" "$root/etc/luci-uploads/iptv.m3u"
+          IPKG_INSTROOT="$root" sh "$tmp/control/postinst"
+          cmp "$tmp/before.m3u" "$root/etc/luci-uploads/iptv.m3u"
+          mkdir -p dist
+          cp "$package" dist/
+          (cd dist && sha256sum *.ipk > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rtp2httpd-3.17.2-r2-qwrt-aarch64_cortex-a53-ipk
+          path: dist/*
+          if-no-files-found: error
