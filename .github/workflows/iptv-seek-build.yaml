@@ -1,0 +1,41 @@
+name: IPTV seek test build
+
+on:
+  push:
+    branches: [iptv-seek-redirect]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  openwrt-aarch64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Zig 0.15.2
+        run: |
+          curl --fail --location --retry 2 --output zig.tar.xz https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
+          echo '02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239  zig.tar.xz' | sha256sum --check
+          tar -xJf zig.tar.xz -C "$RUNNER_TEMP"
+          cat > "$RUNNER_TEMP/zig-aarch64-cc" <<'EOF'
+          #!/usr/bin/env bash
+          exec "$RUNNER_TEMP/zig-x86_64-linux-0.15.2/zig" cc -target aarch64-linux-musl "$@"
+          EOF
+          chmod +x "$RUNNER_TEMP/zig-aarch64-cc"
+      - name: Build static OpenWrt binary
+        env:
+          RELEASE_VERSION: 3.17.2-iptv-seek
+        run: |
+          cmake -S . -B build-arm64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER="$RUNNER_TEMP/zig-aarch64-cc" -DCMAKE_EXE_LINKER_FLAGS="-static -s" \
+            -DCMAKE_INSTALL_SYSCONFDIR=/etc
+          cmake --build build-arm64 --parallel 2
+          readelf -h build-arm64/rtp2httpd | grep 'AArch64'
+          if readelf -l build-arm64/rtp2httpd | grep -q INTERP; then exit 1; fi
+          sha256sum build-arm64/rtp2httpd
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rtp2httpd-iptv-seek-aarch64-linux-musl
+          path: build-arm64/rtp2httpd
+          if-no-files-found: error
