@@ -559,6 +559,27 @@ int stream_context_init_for_worker(stream_context_t *ctx, connection_t *conn, se
       return -1;
     }
 
+    /* Starcor HLS expects a compact UTC date even when an M3U client sends
+     * Unix seconds. Leave other operators and their query formats alone. */
+    const char *query = strchr(service->http_url, '?');
+    char cms_id[32], play_type[16];
+    if (query && service->seek_param_name && strcmp(service->seek_param_name, "PlaySeek") == 0 &&
+        http_parse_query_param(query + 1, "CMSID", cms_id, sizeof(cms_id)) == 0 && strcmp(cms_id, "starcor") == 0 &&
+        http_parse_query_param(query + 1, "PlayType", play_type, sizeof(play_type)) == 0 &&
+        (strcmp(play_type, "tvod") == 0 || strcmp(play_type, "tstv") == 0)) {
+      size_t begin_len = strlen(seek_parse_result.begin_str), end_len = strlen(seek_parse_result.end_str);
+      if (seek_parse_result.begin_parsed && begin_len <= 10 &&
+          strspn(seek_parse_result.begin_str, "0123456789") == begin_len &&
+          strftime(seek_parse_result.begin_str, sizeof(seek_parse_result.begin_str), "%Y%m%dT%H%M%SZ",
+                   &seek_parse_result.begin_tm_utc) != 0)
+        seek_parse_result.seek_begin_offset_seconds = 0;
+      if (seek_parse_result.end_parsed && end_len <= 10 &&
+          strspn(seek_parse_result.end_str, "0123456789") == end_len &&
+          strftime(seek_parse_result.end_str, sizeof(seek_parse_result.end_str), "%Y%m%dT%H%M%SZ",
+                   &seek_parse_result.end_tm_utc) != 0)
+        seek_parse_result.seek_end_offset_seconds = 0;
+    }
+
     /* Build proxy URL with template substitution or seek param append */
     char proxy_url[2048];
     if (service_resolve_upstream_url(service->http_url, service->seek_param_name, &seek_parse_result, proxy_url,
