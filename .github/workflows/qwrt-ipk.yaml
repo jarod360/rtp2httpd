@@ -56,10 +56,6 @@ jobs:
             rm -f "$$backup_dir/iptv.m3u"
             rmdir "$$backup_dir" 2>/dev/null || true
           fi
-          if [ -f "$$IPKG_INSTROOT/lib/functions.sh" ]; then
-            . "$$IPKG_INSTROOT/lib/functions.sh"
-            default_postinst "$$0" "$$@"
-          fi
           exit 0
           endef
 
@@ -100,7 +96,7 @@ jobs:
           cp "$tmp/before.m3u" "$root/etc/luci-uploads/iptv.m3u"
           IPKG_INSTROOT="$root" sh "$tmp/control/preinst"
           cp "$tmp/data/etc/luci-uploads/iptv.m3u" "$root/etc/luci-uploads/iptv.m3u"
-          IPKG_INSTROOT="$root" sh "$tmp/control/postinst"
+          IPKG_INSTROOT="$root" sh "$tmp/control/postinst-pkg"
           cmp "$tmp/before.m3u" "$root/etc/luci-uploads/iptv.m3u"
           mkdir -p dist
           cp "$package" dist/
