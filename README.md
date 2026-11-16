@@ -8,6 +8,26 @@ rtp2httpd 是一个 IPTV 转发服务器，支持将组播 RTP/UDP、RTSP 转换
 
 本项目专为中国大陆 IPTV 环境进行优化，实现了运营商级的 FCC（[Fast Channel Change](https://blog.csdn.net/yangzex/article/details/131328837)）快速换台协议，可作为 `udpxy` 和 `msd_lite` 的无缝替代，为 IPTV 用户提供接近原生机顶盒的观看体验。
 
+## 宁夏联通 IPTV 回放与时移适配
+
+此分支基于 rtp2httpd v3.17.2。已在 QWRT 25.12.2（`ipq53xx/generic`、`aarch64_cortex-a53`、`opkg`）验证。核心 IPK 为 `rtp2httpd_3.17.2-r2_aarch64_cortex-a53.ipk`，可搭配现有 LuCI 应用。云端检查了架构、配置文件和升级时的频道列表保留逻辑，并在目标路由器上通过 `opkg --noaction` 模拟升级。 [QWRT IPK 构建和下载](https://github.com/jarod360/rtp2httpd/actions/runs/43791443211)
+
+### 核心改动
+
+- **回放重定向**：保留运营商在 HTTP `Location` 中给定的 `PlaySeek` 查询参数位置，避免历史请求被当作直播处理。
+- **TiviMate**：对 Starcor HLS 回放和时移请求，把客户端发来的 Unix 秒转换为运营商要求的紧凑 UTC 格式。已在 Android TV 上验证 CCTV1 往期节目回放。
+- **HTTPS 反代**：启用可信反代转发头后，代理输出的 HLS 分片使用同源绝对路径，让客户端沿用清单的协议、域名和端口。已通过 Lucky 和雷池 WAF 的转发链路验证 CCTV10 的历史清单和视频分片。
+
+### IPTV 上游与客户端配置
+
+- 在 QWRT 的 `/etc/config/network` 中，让 IPTV 接口通过 DHCP 获取运营商网段的 IPv4 地址，并设置 `defaultroute=0`、`peerdns=0`。把回放入口及其 HLS 重定向、分片所在网段的静态路由绑定到 IPTV 接口，网关使用当地 IPTV 网关。普通上网的默认路由继续走 WAN。实际接口名、网关和分发网段以当地运营商为准。
+- 在 rtp2httpd 中把 IPTV 网口指定为上游接口。直播沿用 RTP 组播，HLS 回放用 `catchup="default"` 和 `catchup-source`，并配置对应的 EPG。回放和时移支持范围以机顶盒频道表和实际播放验证为准。
+- **APTV** 已实机验证回放。客户端列表采用 APTV 的本地时间占位符。北京时间且未另设客户端时区修正时，可用下面的查询格式和 rtp2httpd 现有的 `r2h-seek-offset` 参数。 [APTV 开发者示例](https://github.com/Kimentanm/aptv/issues/59)
+
+  ```text
+  ?PlaySeek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}&r2h-seek-offset=-28800
+  ```
+
 ## ✨ 核心功能特性
 
 ### 📡 多协议支持
