@@ -1209,6 +1209,19 @@ static int http_proxy_parse_response_headers(http_proxy_session_t *session) {
         char app_base_path[HTTP_URL_BUFFER_SIZE];
         if (http_proxy_get_app_base_path(app_base_path, sizeof(app_base_path)) == 0 &&
             http_proxy_build_url(location_header, app_base_path, rewritten_location, sizeof(rewritten_location)) == 0) {
+          const char *query = strchr(location_header, '?');
+          char seek_value[256];
+          char seek_name[128];
+          /* An upstream HTTP redirect already contains the server's final seek
+           * query. Keep its parameter order when the client follows it. */
+          if (strncasecmp(location_header, "http://", 7) == 0 && query &&
+              http_parse_query_param(query + 1, "PlaySeek", seek_value, sizeof(seek_value)) == 0 &&
+              http_parse_query_param(query + 1, "r2h-seek-name", seek_name, sizeof(seek_name)) != 0) {
+            const char preserve_seek[] = "&r2h-seek-name=__r2h_redirect_passthrough";
+            size_t location_len = strlen(rewritten_location);
+            if (sizeof(rewritten_location) - location_len >= sizeof(preserve_seek))
+              memcpy(rewritten_location + location_len, preserve_seek, sizeof(preserve_seek));
+          }
           location_rewritten = 1;
           logger(LOG_DEBUG, "HTTP Proxy: Rewritten Location: %s -> %s", location_header, rewritten_location);
         }
