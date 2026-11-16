@@ -741,8 +741,16 @@ static int http_proxy_finalize_rewrite(http_proxy_session_t *session) {
     }
     session->rewrite_body_buffer[session->rewrite_body_buffer_used] = '\0';
 
-    /* Build base URL and rewrite context */
-    char *base_url = build_proxy_base_url(session->host_header, session->x_forwarded_host, session->x_forwarded_proto);
+    /* Behind a reverse proxy, let HLS clients keep the playlist's public
+     * scheme and authority even when an intermediate hop rewrites them. */
+    char *base_url;
+    if (config.xff && (session->x_forwarded_host[0] || session->x_forwarded_proto[0]) &&
+        strstr(session->rewrite_body_buffer, "\n#EXT-X-")) {
+      char app_base_path[HTTP_URL_BUFFER_SIZE];
+      base_url = http_proxy_get_app_base_path(app_base_path, sizeof(app_base_path)) == 0 ? strdup(app_base_path) : NULL;
+    } else {
+      base_url = build_proxy_base_url(session->host_header, session->x_forwarded_host, session->x_forwarded_proto);
+    }
     if (!base_url) {
       logger(LOG_ERROR, "HTTP Proxy: Failed to build base URL for rewriting");
       return -1;
