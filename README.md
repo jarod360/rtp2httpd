@@ -28,6 +28,16 @@ rtp2httpd 是一个 IPTV 转发服务器，支持将组播 RTP/UDP、RTSP 转换
   ?PlaySeek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}&r2h-seek-offset=-28800
   ```
 
+### 抓包分析流程
+
+1. **接线和确认方向**。在自有机顶盒与上联之间接入网络 TAP，或在交换机上做双向端口镜像。Throwing Star LAN Tap 的两个监听口各输出一个方向；要同时看到请求和响应，应分接两块网卡。只有一块网卡时，可以分两轮抓包，并重复相同的开机和播放动作。先确认抓得到机顶盒发出的请求和服务器回包。 [Throwing Star 接线说明](https://greatscottgadgets.com/throwingstar/throwing-star-instructions.pdf)
+2. **先抓开机，再抓动作**。先开始抓包，再重启盒子。分别记录一次换台、一次已播节目的回放，以及一次在直播上的回退。每次只做一个动作，记下频道、节目起止时间、回退时长、时区和是否出画。回放和时移各换一个频道复测，避免用单频道推断全部频道。
+3. **找频道表和直播地址**。Wireshark 可用 `http.request.uri contains "getAllChannel.json"` 查找频道表请求，再用 `tcp.stream == N` 看同一连接的响应。若只抓了回程，可用「文件 → 导出对象 → HTTP」找含 `channels` 的 JSON。若只抓到请求和 ACK，检查监听方向。用 `igmp || udp` 看组播加入和直播流；组播媒体帧的目的 MAC 不一定是机顶盒 MAC。对照 `params.hwurl` 的组播 IP 和端口、频道名和 FCC 参数，区分改地址、改名以及本次表中未下发的频道。
+4. **找回放与时移上游**。用 `http.request.uri contains "PlaySeek" || http.response.code == 302` 关联初始请求、重定向、HLS 清单和首个媒体分片。此次 Starcor 回放使用 `PlayType=tvod` 加起止时间，时移使用 `PlayType=tstv` 加起点和末尾连字符。盒子显示的是北京时间，请求中的 `Z` 时间是 UTC。用两个实际请求交叉核对 `phychannel.code` 到 `PhysicalContentID` 的映射；本次样本符合在物理频道码前加 `01` 的规则。别省略频道表的 `lookbackAvailable`、`timeshiftAvailable` 标记。
+5. **先做单频道端到端测试**。保留原直播 URL，给已确认支持回放的频道加 `catchup-source`，并检查 M3U 的 `tvg-id` 能否对上 EPG。先从路由器测试运营商入口及每一跳分发地址，再测试 rtp2httpd 内网回放、客户端，以及外网反代。核对 HLS 中的 `nn_file_time` 和选中的历史时间，再取一个视频分片验证。HTTP 200 也可能返回登录页或当前直播，不能单凭状态码判断成功。
+6. **按症状定位**。入口通而重定向后出现 503 时，查 CDN 到 IPTV 接口的路由。节目显示对但画面是直播时，查实际 `PlaySeek` 值、格式和参数顺序。HTTPS 网页能读清单却卡在 0% 时，检查分片是否沿用公开 HTTPS 的域名和端口，也核对分片请求有没有带上所需认证。单频道确认后再逐条验证其他标记支持的频道。
+7. **保留脱敏结果**。公开记录只保存频道映射、脱敏 URL 模板、验证过的时间和结论。原始 PCAP、登录响应和含鉴权的完整地址留在私有环境，整理完再按需清理。
+
 ## ✨ 核心功能特性
 
 ### 📡 多协议支持
